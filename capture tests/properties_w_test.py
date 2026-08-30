@@ -1,306 +1,124 @@
-#Physical properties for an aqueous MEA-CO2-H2O system.
-#This file contains:
-#Physical constants
-#Process conditions
-#CO2 partial pressure
-#Water/MEA composition
-#MEA amount
-#CO2 loading
-
 from dataclasses import dataclass
-
-
-# ============================================================
-# 1. PHYSICAL CONSTANTS
-# ============================================================
 
 R = 8.314462618
 # Universal gas constant
-# Units: J/(mol*K)
-
 
 MW_CO2 = 44.0095
 # Molecular weight of CO2
-# Units: g/mol
-
 
 MW_MEA = 61.083
-# Molecular weight of monoethanolamine (MEA)
-# Units: g/mol
-
+# Molecular weight of MEA
 
 MW_H2O = 18.01528
 # Molecular weight of water
-# Units: g/mol
 
-
-# ============================================================
-# 2. PROCESS CONDITIONS
-# ============================================================
-
-#class set used to hold process conditions
 @dataclass
 class ProcessConditions:
-
-    temperature_K: float
-    # Temperature in Kelvin
-
-    pressure_Pa: float
-    # Total pressure in Pascal
-
+    temperature: float #kelvin
+    pressure: float #pascal
     co2_mole_fraction: float
-    # CO2 mole fraction in the gas
-
     mea_mass_fraction: float
-    # MEA mass fraction in the liquid
+    gas_molar_flow: float #mol/s
+    solvent_molar_flow: float #mol/s
 
-    gas_molar_flow: float
-    # Gas flow rate in mol/s
+def co2_partial_pressure(co2_mole_fraction, pressure):
 
-    solvent_molar_flow: float
-    # Solvent flow rate in mol/s
+    if not 0 <= co2_mole_fraction <= 1 or not pressure > 0:
+        raise ValueError("CO2 mole fraction must be between 0 and 1. and pressure must be positive.")
 
+    return (co2_mole_fraction * pressure)
 
-# ============================================================
-# 3. CO2 PARTIAL PRESSURE
-# ============================================================
-
-def co2_partial_pressure(
-    co2_mole_fraction,
-    pressure_Pa
-):
-
-    #calculates the partial pressure of CO2 in the gas phase
-    if not 0 <= co2_mole_fraction <= 1:
-
-        raise ValueError(
-            "CO2 mole fraction must be between 0 and 1."
-        )
-
-
-    if pressure_Pa <= 0:
-
-        raise ValueError(
-            "Pressure must be greater than zero."
-        )
-
-
-    return (
-        co2_mole_fraction
-        * pressure_Pa
-    )
-
-
-# ============================================================
-# 4. WATER MASS FRACTION
-# ============================================================
-
-def water_mass_fraction(
-    mea_mass_fraction
-):
-    # calculates mass fraction of water in the MEA/water solution
+def water_mass_fraction(mea_mass_fraction):
     if not 0 < mea_mass_fraction < 1:
+        raise ValueError("MEA mass fraction must be between 0 and 1.")
 
-        raise ValueError(
-            "MEA mass fraction must be between 0 and 1."
-        )
+    return (1.0 - mea_mass_fraction)
 
-    return (
-        1.0 - mea_mass_fraction
-    )
+def solvent_mw(mea_mass_fraction):
+    water_fraction = water_mass_fraction(mea_mass_fraction)
 
+    return 1.0 / ((mea_mass_fraction / MW_MEA) + (water_fraction / MW_H2O))
 
-# ============================================================
-# 5. SOLVENT MOLECULAR WEIGHT
-# ============================================================
-
-def solvent_molecular_weight(
-    mea_mass_fraction
-):
-    # calculates the approximate molecular weight of the MEA/water solution
-    water_fraction = (
-        water_mass_fraction(
-            mea_mass_fraction
-        )
-    )
-
-
-    return (
-        mea_mass_fraction * MW_MEA
-        +
-        water_fraction * MW_H2O
-    )
-
-
-# ============================================================
-# 6. MEA MOLAR AMOUNT
-# ============================================================
-
-def mea_moles_per_kg_solution(
-    mea_mass_fraction
-):
-    #calculates the number of moles of MEA in 1 kg of solution (approximate)
-
+def solution_mass(mea_mass_fraction, solution_volume, solution_density):
     if not 0 < mea_mass_fraction < 1:
+        raise ValueError("MEA mass fraction must be between 0 and 1.")
+    if solution_volume <= 0:
+        raise ValueError("Solution volume must be positive.")
+    if solution_density <= 0:
+        raise ValueError("Solution density must be positive.")
 
-        raise ValueError(
-            "MEA mass fraction must be between 0 and 1."
-        )
+    return (solution_volume * solution_density)
 
+def mea_moles(mea_mass_fraction, solution_mass):
+    if not 0 < mea_mass_fraction < 1:
+        raise ValueError("MEA mass fraction must be between 0 and 1.")
+    if solution_mass <= 0:
+        raise ValueError("Solution mass must be positive.")
 
-    mass_MEA_kg = (
-        mea_mass_fraction
-    )
+    mea_mass = mea_mass_fraction * solution_mass
 
+    return (mea_mass / MW_MEA)
 
-    mass_MEA_g = (
-        mass_MEA_kg * 1000
-    )
+def co2_moles(co2_absorbed_mass):
+    if co2_absorbed_mass < 0:
+        raise ValueError("CO2 absorbed mass cannot be negative.")
 
+    return (co2_absorbed_mass / MW_CO2)
 
-    moles_MEA = (
-        mass_MEA_g
-        / MW_MEA
-    )
-
-
-    return moles_MEA
-
-
-# ============================================================
-# 7. CO2 LOADING
-# ============================================================
-
-def co2_loading(
-    co2_moles,
-    mea_moles
-):
+def co2_loading(co2_absorbed_moles, mea_mass_fraction, solution_mass):
     # calculates the ratio in mol CO2/mol MEA
-    #  high ratios indicate high loading of CO2 in the solution
+    # high ratios indicate high loading of CO2 in the solution
 
-    if co2_moles < 0:
+    if co2_absorbed_moles < 0:
+        raise ValueError("CO2 amount cannot be negative.")
 
-        raise ValueError(
-            "CO2 amount cannot be negative."
-        )
+    n_mea = mea_moles(mea_mass_fraction, solution_mass)
 
+    if n_mea <= 0:
+        raise ValueError("MEA amount must be greater than zero.")
 
-    if mea_moles <= 0:
-
-        raise ValueError(
-            "MEA amount must be greater than zero."
-        )
-
-
-    return (
-        co2_moles
-        / mea_moles
-    )
-
-
-# ============================================================
-# 8. TEST THE FUNCTIONS
-# ============================================================
+    return (co2_absorbed_moles / n_mea)
 
 if __name__ == "__main__":
 
-    print("======================================")
-    print("     MEA PHYSICAL PROPERTY TEST")
-    print("======================================")
-
+    print("PROPERTY TEST")
 
     # Example process conditions
 
-    temperature = 40 + 273.15
+    temperature = float(input("Enter temperature in Kelvin: "))
 
-    pressure = 101325
+    pressure = float(input("Enter pressure in Pascals: "))
 
-    co2_fraction = 0.12
+    co2_fraction = float(input("Enter mole fraction of CO2: "))
 
-    mea_fraction = 0.30
+    mea_fraction = float(input("Enter mass fraction of MEA: "))
 
+    volume = float(input("Enter volume of solution in mL: "))
 
-    # ------------------------------------
-    # CO2 partial pressure
-    # ------------------------------------
+    density = float(input("Enter density of solution in g/mL: "))
 
-    P_CO2 = co2_partial_pressure(
-        co2_fraction,
-        pressure
-    )
+    co2_absorbed_mass = float(input("Enter absorbed CO2 mass in g: "))
 
+    Pp_CO2 = co2_partial_pressure(co2_fraction, pressure)
+    print(f"\nCO2 partial pressure: {Pp_CO2:.2f} Pa")
 
-    print(
-        f"\nCO2 partial pressure: "
-        f"{P_CO2:.2f} Pa"
-    )
+    water_fraction = water_mass_fraction(mea_fraction)
+    print(f"Water mass fraction: {water_fraction:.2f}")
 
+    MW_solution = solvent_mw(mea_fraction)
+    print(f"Approximate solvent MW: {MW_solution:.2f} g/mol")
 
-    # ------------------------------------
-    # Water concentration
-    # ------------------------------------
+    calc_solution_mass = solution_mass(mea_fraction, volume, density)
 
-    water_fraction = (
-        water_mass_fraction(
-            mea_fraction
-        )
-    )
+    calc_mea_moles = mea_moles(mea_fraction, calc_solution_mass)
 
+    mea_in_kg_sln = mea_fraction * 1.0
 
-    print(
-        f"Water mass fraction: "
-        f"{water_fraction:.2f}"
-    )
+    print(f"MEA in moles: {calc_mea_moles:.2f} mol")
+    print(f"MEA mass in 1 kg of solution {mea_in_kg_sln}")
 
+    co2_amount = co2_moles(co2_absorbed_mass)
 
-    # ------------------------------------
-    # Solvent molecular weight
-    # ------------------------------------
+    calc_co2_loading = co2_loading(co2_amount, mea_fraction, calc_solution_mass)
 
-    MW_solution = (
-        solvent_molecular_weight(
-            mea_fraction
-        )
-    )
-
-
-    print(
-        f"Approximate solvent MW: "
-        f"{MW_solution:.2f} g/mol"
-    )
-
-
-    # ------------------------------------
-    # MEA amount
-    # ------------------------------------
-
-    mea_moles = (
-        mea_moles_per_kg_solution(
-            mea_fraction
-        )
-    )
-
-
-    print(
-        f"MEA in 1 kg solution: "
-        f"{mea_moles:.2f} mol"
-    )
-
-
-    # ------------------------------------
-    # Example CO2 loading
-    # ------------------------------------
-
-    loading = co2_loading(
-        co2_moles=2.0,
-        mea_moles=5.0
-    )
-
-
-    print(
-        f"Example CO2 loading: "
-        f"{loading:.3f} mol CO2/mol MEA"
-    )
-
-
-    print("\n======================================")
+    print(f"Example CO2 loading: {calc_co2_loading:.3f} mol CO2/mol MEA")
