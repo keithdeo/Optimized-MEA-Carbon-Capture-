@@ -1,443 +1,180 @@
 import math
 
-from properties import R
-
 # Reference states
+R = 8.314462618  # Universal gas constant, J/(mol·K)
+T_REF = 298.15  # Baseline reference temperature in Kelvin (25.0 °C)
 
-# temperature
-T_REF = 298.15       # K
+K_REF_298 = {
+    "K_HYDRATION": 1.70e-3,  # CO2(aq) + H2O <-> H2CO3
+    "K_1": 2.51e-4,  # H2CO3 <-> H+ + HCO3-
+    "K_2": 4.69e-11,  # HCO3- <-> H+ + CO3--
+    "K_H2O": 1.008e-14,  # H2O <-> H+ + OH-
+    "K_MEA": 1.023e-10,  # MEAH+ <-> MEA + H+
+    "K_CARBAMATE": 42.5,  # CO2 + MEA <-> MEACOO-
+}
 
-
-# CO2 hydration
-# CO2 + H2O <-> H2CO3
-K_HYDRATION_REF = 1.7e-3
-
-
-# Carbonic acid first dissociation
-# H2CO3 <-> H+ + HCO3-
-K1_REF = 2.5e-4
-
-
-# Carbonic acid second dissociation
-# HCO3- <-> H+ + CO3--
-K2_REF = 4.7e-11
-
-
-# Water dissociation
-# H2O <-> H+ + OH-
-KW_REF = 1.07e-14
+# Standard reaction enthalpies (J/mol at 298.15 K)
+DELTA_H = {
+    "H_HYDRATION": 19000.0,  # CO2(aq) + H2O <-> H2CO3     [endothermic]
+    "H_1": 9100.0,  # H2CO3 <-> H+ + HCO3-          [endothermic]
+    "H_2": 14900.0,  # HCO3- <-> H+ + CO3--          [endothermic]
+    "H_H2O": 55800.0,  # H2O <-> H+ + OH-              [endothermic]
+    "H_MEA": 52000.0,  # MEAH+ <-> MEA + H+           [endothermic]
+    "H_CARBAMATE": -48000.0,  # CO2 + MEA <-> MEACOO-         [exothermic]
+}
 
 
-# MEA protonation
-# MEAH+ <-> MEA + H+
-MEA_ACIDITY_REF = 1.02e-10
+def user_temp(temp_celsius):
+    t_user = temp_celsius + 273.15
+    return t_user
 
 
-# MEA carbamate formation
-# CO2 + MEA <-> MEACOO-
-CARBAMATE_K_REF = 40.0
+def calculate_k(t_user, k_298, deltah):
+    exponent = -(deltah / R) * ((1.0 / t_user) - (1.0 / T_REF))
+    calibrated_k = k_298 * math.exp(exponent)
+    return calibrated_k
 
 
-# TEMPERATURE CORRELATION
+def equilibrium_constants(t_user):
 
-def temperature_equilibrium_constant(
-    K_ref,
-    delta_H,
-    temperature_K
-):
-    """
-    Estimate an equilibrium constant at a different
-    temperature using a van't Hoff relationship.
-
-        ln(K2/K1)
-        =
-        -(delta_H/R)(1/T2 - 1/T1)
-
-    Parameters
-    ----------
-    K_ref : float
-        Equilibrium constant at T_REF.
-
-    delta_H : float
-        Enthalpy change, J/mol.
-
-    temperature_K : float
-        Temperature in Kelvin.
-    """
-
-    if temperature_K <= 0:
-
-        raise ValueError(
-            "Temperature must be greater than zero."
-        )
-
-    exponent = (
-        -delta_H / R
-        * (
-            1 / temperature_K
-            - 1 / T_REF
-        )
+    k_hydration = calculate_k(
+        t_user, K_REF_298["K_HYDRATION"], DELTA_H["H_HYDRATION"]
     )
-
-    return (
-        K_ref
-        * math.exp(exponent)
-    )
-
-
-# EQUILIBRIUM CONSTANTS
-
-def get_equilibrium_constants(
-    temperature_K
-):
-
-    # Calculate temperature-adjusted equilibrium constants.
-
-    K_hydration = temperature_equilibrium_constant(
-        K_HYDRATION_REF,
-        delta_H=15000,
-        temperature_K=temperature_K
-    )
-
-    K1 = temperature_equilibrium_constant(
-        K1_REF,
-        delta_H=1500,
-        temperature_K=temperature_K
-    )
-
-    K2 = temperature_equilibrium_constant(
-        K2_REF,
-        delta_H=14000,
-        temperature_K=temperature_K
-    )
-
-    Kw = temperature_equilibrium_constant(
-        KW_REF,
-        delta_H=55700,
-        temperature_K=temperature_K
-    )
-
-    Ka_MEA = temperature_equilibrium_constant(
-        MEA_ACIDITY_REF,
-        delta_H=41000,
-        temperature_K=temperature_K
-    )
-
-    K_carbamate = (
-        CARBAMATE_K_REF
+    k_1 = calculate_k(t_user, K_REF_298["K_1"], DELTA_H["H_1"])
+    k_2 = calculate_k(t_user, K_REF_298["K_2"], DELTA_H["H_2"])
+    k_h2o = calculate_k(t_user, K_REF_298["K_H2O"], DELTA_H["H_H2O"])
+    k_mea = calculate_k(t_user, K_REF_298["K_MEA"], DELTA_H["H_MEA"])
+    k_carbamate = calculate_k(
+        t_user, K_REF_298["K_CARBAMATE"], DELTA_H["H_CARBAMATE"]
     )
 
     return {
-        "K_hydration": K_hydration,
-        "K1": K1,
-        "K2": K2,
-        "Kw": Kw,
-        "Ka_MEA": Ka_MEA,
-        "K_carbamate": K_carbamate
+        "k_hydration": k_hydration,
+        "k_1": k_1,
+        "k_2": k_2,
+        "k_h2o": k_h2o,
+        "k_mea": k_mea,
+        "k_carbamate": k_carbamate,
     }
 
 
-# SPECIES CALCULATION
+def carbonate_species(t_user, co2_conc, h_conc):
+    if co2_conc < 0:
+        raise ValueError("CO2 concentration cannot be negative.")
 
-def calculate_carbonate_species(
-    co2_concentration,
-    H_concentration,
-    temperature_K
-):
-    """
-    Calculate approximate concentrations of:
+    if h_conc <= 0:
+        raise ValueError("Hydrogen-ion concentration cannot be negative.")
 
-        CO2
-        H2CO3
-        HCO3-
-        CO3--
+    constants = equilibrium_constants(t_user)
 
-    based on equilibrium relationships
-    """
+    K_hydration = constants["k_hydration"]
+    K1 = constants["k_1"]
+    K2 = constants["k_2"]
 
-    if co2_concentration < 0:
+    H2CO3 = K_hydration * co2_conc
+    HCO3 = K1 * (H2CO3 / h_conc)
+    CO3 = K2 * (HCO3 / h_conc)
 
-        raise ValueError(
-            "CO2 concentration cannot be negative."
-        )
-
-    if H_concentration <= 0:
-
-        raise ValueError(
-            "Hydrogen-ion concentration must be positive."
-        )
-
-    constants = get_equilibrium_constants(
-        temperature_K
-    )
-
-    K_hydration = constants["K_hydration"]
-    K1 = constants["K1"]
-    K2 = constants["K2"]
+    return {"CO2": co2_conc, "H2CO3": H2CO3, "HCO3-": HCO3, "CO3--": CO3}
 
 
-    # CO2 hydration
-    # CO2 + H2O <-> H2CO3
-    # [H2CO3] = K_hydration [CO2]
-
-    H2CO3 = (
-        K_hydration
-        * co2_concentration
-    )
-
-
-    # First dissociation
-    # H2CO3 <-> H+ + HCO3-
-    # K1 = [H+][HCO3-]/[H2CO3]
-    # Therefore:
-    # [HCO3-] = K1[H2CO3]/[H+]
-
-    HCO3 = (
-        K1
-        * H2CO3
-        / H_concentration
-    )
-
-
-    # Second dissociation
-    # HCO3- <-> H+ + CO3--
-    # K2 = [H+][CO3--]/[HCO3-]
-
-    CO3 = (
-        K2
-        * HCO3
-        / H_concentration
-    )
-
-
-    return {
-        "CO2": co2_concentration,
-        "H2CO3": H2CO3,
-        "HCO3-": HCO3,
-        "CO3--": CO3
-    }
-
-
-# MEA SPECIES CALCULATION
-
-def calculate_mea_species(
-    total_MEA,
-    H_concentration,
-    temperature_K
-):
-    """
-    Calculate free MEA and protonated MEA.
-
-        MEAH+ <-> MEA + H+
-
-    Ka = [MEA][H+]/[MEAH+]
-
-    Therefore:
-
-        [MEAH+] = [MEA][H+]/Ka
-    """
-
-    if total_MEA < 0:
-
-        raise ValueError(
-            "Total MEA concentration cannot be negative."
-        )
-
-    if H_concentration <= 0:
-
-        raise ValueError(
-            "Hydrogen-ion concentration must be positive."
-        )
-
-    constants = get_equilibrium_constants(
-        temperature_K
-    )
-
-    Ka_MEA = constants["Ka_MEA"]
-
-
-    # total_MEA = [MEA] + [MEAH+]
+def mea_species(t_user, total_mea, h_conc):
     # [MEAH+] = [MEA][H+]/Ka
+    if total_mea < 0:
+        raise ValueError("Total MEA concentration cannot be negative.")
 
-    free_MEA = (
-        total_MEA
-        /
-        (
-            1
-            +
-            H_concentration
-            / Ka_MEA
-        )
-    )
+    if h_conc <= 0:
+        raise ValueError("Hydrogen-ion concentration must be positive.")
 
+    constants = equilibrium_constants(t_user)
+    Ka_MEA = constants["k_mea"]  # FIXED: Key lowercase 'k_mea'
 
-    MEAH = (
-        total_MEA
-        - free_MEA
-    )
+    # [MEAH+] = [MEA][H+]/Ka
+    free_mea = total_mea / (1 + h_conc / Ka_MEA)
+    MEAH = total_mea - free_mea
+
+    return {"MEA": free_mea, "MEAH+": MEAH}
 
 
-    return {
-        "MEA": free_MEA,
-        "MEAH+": MEAH
-    }
+def carbamate(t_user, co2_conc, free_mea):
+    # CO2 + MEA <-> MEACOO-
+    if co2_conc < 0:
+        raise ValueError("CO2 concentration cannot be negative.")
+
+    if free_mea < 0:
+        raise ValueError("Free MEA concentration cannot be negative.")
+
+    constants = equilibrium_constants(t_user)
+    K_carbamate = constants["k_carbamate"]
+    carbamate_conc = K_carbamate * co2_conc * free_mea
+
+    return carbamate_conc
 
 
-# MEA CARBAMATE CALCULATION
+def hydroxide_conc(t_user, h_conc):
+    # Kw = [H+][OH-]
+    if h_conc <= 0:
+        raise ValueError("Hydrogen-ion concentration must be positive.")
 
-def calculate_carbamate(
-    co2_concentration,
-    free_MEA,
-    temperature_K
-):
-    """
-    Calculate approximate MEA carbamate concentration.
+    constants = equilibrium_constants(t_user)
+    Kw = constants["k_h2o"]
 
-        CO2 + MEA <-> MEACOO-
-
-    This represents the important carbamate
-    formation pathway in aqueous MEA carbon capture.
-    """
-
-    if co2_concentration < 0:
-
-        raise ValueError(
-            "CO2 concentration cannot be negative."
-        )
-
-    if free_MEA < 0:
-
-        raise ValueError(
-            "Free MEA concentration cannot be negative."
-        )
-
-    constants = get_equilibrium_constants(
-        temperature_K
-    )
-
-    K_carbamate = (
-        constants["K_carbamate"]
-    )
+    return Kw / h_conc
 
 
-    carbamate = (
-        K_carbamate
-        * co2_concentration
-        * free_MEA
-    )
-
-
-    return carbamate
-
-
-# HYDROXIDE CONCENTRATION
-
-def hydroxide_concentration(
-    H_concentration,
-    temperature_K
-):
-    """
-    Calculate OH- concentration using:
-
-        Kw = [H+][OH-]
-    """
-
-    if H_concentration <= 0:
-
-        raise ValueError(
-            "Hydrogen-ion concentration must be positive."
-        )
-
-    constants = get_equilibrium_constants(
-        temperature_K
-    )
-
-    Kw = constants["Kw"]
-
-
-    return (
-        Kw
-        / H_concentration
-    )
-
-
-# SPECIES SUMMARY
-
-def equilibrium_state(
-    total_co2,
-    total_MEA,
-    H_concentration,
-    temperature_K
-):
-    """
-    Calculate the chemical species present in the
-    MEA-CO2-H2O system.
-
-    Parameters
-    ----------
-    total_co2 : float
-        Total dissolved CO2 concentration, mol/L.
-
-    total_MEA : float
-        Total MEA concentration, mol/L.
-
-    H_concentration : float
-        Hydrogen-ion concentration, mol/L.
-
-    temperature_K : float
-        Temperature, K.
-    """
-
+def equilibrium_state(t_user, total_co2, total_mea, h_conc):
+    # Calculate the chemical species present in the MEA-CO2-H2O system.
+    # total_co2 = Total dissolved CO2 concentration, mol/L.
+    # total_MEA = Total MEA concentration, mol/L.
+    # H_conc = Hydrogen-ion concentration, mol/L.
     if total_co2 < 0:
+        raise ValueError("Total CO2 concentration cannot be negative.")
 
-        raise ValueError(
-            "Total CO2 concentration cannot be negative."
-        )
+    if total_mea <= 0:
+        raise ValueError("Total MEA concentration must be greater than zero.")
 
-    if total_MEA <= 0:
+    if h_conc <= 0:
+        raise ValueError("Hydrogen-ion concentration must be positive.")
 
-        raise ValueError(
-            "Total MEA concentration must be greater than zero."
-        )
-
-    if H_concentration <= 0:
-
-        raise ValueError(
-            "Hydrogen-ion concentration must be positive."
-        )
-
-
-    carbonate = calculate_carbonate_species(
-        total_co2,
-        H_concentration,
-        temperature_K
-    )
-
-
-    mea = calculate_mea_species(
-        total_MEA,
-        H_concentration,
-        temperature_K
-    )
-
-
-    carbamate = calculate_carbamate(
-        carbonate["CO2"],
-        mea["MEA"],
-        temperature_K
-    )
-
-
-    OH = hydroxide_concentration(
-        H_concentration,
-        temperature_K
-    )
-
+    carbonate = carbonate_species(t_user, total_co2, h_conc)
+    mea = mea_species(t_user, total_mea, h_conc)
+    carbamate_val = carbamate(
+        t_user, total_co2, mea["MEA"]
+    )  # FIXED: Renamed variable to avoid shadowing function
+    OH = hydroxide_conc(t_user, h_conc)
 
     return {
         **carbonate,
         **mea,
-        "MEACOO-": carbamate,
-        "H+": H_concentration,
-        "OH-": OH
+        "MEACOO-": carbamate_val,
+        "H+": h_conc,
+        "OH-": OH,
     }
+
+
+def eq_loading(t_user, pressure, Pp_co2, mea_mass_fraction, loading=0.0):
+    if t_user <= 0:
+        raise ValueError("Temperature must be greater than zero.")
+
+    if pressure <= 0:
+        raise ValueError("Pressure must be greater than zero.")
+
+    if not 0 <= Pp_co2 <= pressure:
+        raise ValueError(
+            "CO2 partial pressure must be between zero and total pressure."
+        )
+
+    if not 0 < mea_mass_fraction < 1:
+        raise ValueError("MEA mass fraction must be between 0 and 1.")
+
+    pressure_factor = Pp_co2 / (Pp_co2 + 10000.0)
+    concentration_factor = mea_mass_fraction / 0.30
+    temperature_factor = 313.15 / t_user
+
+    return min(
+        0.50,
+        max(
+            loading,
+            0.50 * pressure_factor * concentration_factor * temperature_factor,
+        ),
+    )
