@@ -1,466 +1,318 @@
 import math
 
-#importing the necessary functions from other modules
-from properties import (
-    co2_partial_pressure,
-    co2_loading,
-    water_mass_fraction,
-    mea_moles_per_kg_solution
-)
+from eq import eq_loading
+from kinetics import reaction_rate
+from properties import co2_partial_pressure, mea_moles, water_mass_fraction
 
-from eq import (
-    equilibrium_state
-)
+DEFAULT_SEGMENTS = float(input("Enter the number of absorber segments (between 5.0 and 500.0): "))
+DEFAULT_SOLVENT_DENSITY = float(input("Enter the solvent density (kg/m³, between 950.0 and 1250.0): "))
+DEFAULT_CO2_BALANCE_TOLERANCE = float(input("Enter the CO2 balance tolerance (%, between 0.1% and 20%): "))
+DEFAULT_CO2_BALANCE_TOLERANCE = DEFAULT_CO2_BALANCE_TOLERANCE / 100.0 
 
-from kinetics import (
-    reaction_rate
-)
+if not 5.0 <= DEFAULT_SEGMENTS <= 500.0:
+    raise ValueError("Number of absorber segments must be between 5.0 and 500.0.")
 
-#trial value for the number of segments in the absorber, more segments = more specificity
-DEFAULT_SEGMENTS = 50
+if not 950.0 <= DEFAULT_SOLVENT_DENSITY <= 1250.0:
+    raise ValueError("Solvent density must be between 950.0 and 1250.0 kg/m³.")
 
-def gas_liquid_transfer(
-    gas_co2_fraction,
-    pressure_Pa,
-    liquid_co2_concentration,
-    equilibrium_co2_concentration,
-    mass_transfer_coefficient,
-    interfacial_area
-):
+if not 0.001 <= DEFAULT_CO2_BALANCE_TOLERANCE <= 0.20:
+    raise ValueError("CO2 balance tolerance must be between 0.1% and 20%.")
 
-    if not 0 <= gas_co2_fraction <= 1:
+if not 0 < DEFAULT_CO2_BALANCE_TOLERANCE <= 0.20:
+    raise ValueError("CO2 balance tolerance must be between 0.1% and 20%.")
 
-        raise ValueError(
-            "Gas CO2 fraction must be between 0 and 1."
-        )
-    
-     #calculates the tendancy of CO2 to move from the gas phase to the liquid phase
-    driving_force = max(
-        0.0,
-        equilibrium_co2_concentration
-        - liquid_co2_concentration
-    )
+def gas_liq_transfer(loading_driving_force, mea_conc, mass_coeff, interfacial):
 
-    #calculates the rate of CO2 transfer from the gas phase to the liquid phase
-    transfer_rate = (
-        mass_transfer_coefficient
-        * interfacial_area
-        * driving_force
-    )
+    if mea_conc <= 0:
+        raise ValueError("MEA concentration must be positive.")
 
-    return transfer_rate
+    if mass_coeff <= 0:
+        raise ValueError("Mass-transfer coefficient must be positive.")
+
+    if interfacial <= 0:
+        raise ValueError("Interfacial area must be positive.")
+
+    if loading_driving_force <= 0:
+        return 0.0
+
+    # CO2 concentration driving force:
+    # Delta C_CO2 = Delta alpha * C_MEA
+    co2_driving_force_mol_m3 = loading_driving_force * mea_conc
+
+    # Mass-transfer capacity:
+    # mol/s = K_L * A * Delta C
+    transfer_rate = mass_coeff * interfacial * co2_driving_force_mol_m3
+
+    return max(transfer_rate, 0.0)
+
 
 def simulate_absorber(
     co2_inlet_fraction,
     gas_flow,
     solvent_flow,
     mea_mass_fraction,
-    temperature_K,
+    temperature_k,
     pressure_Pa,
     column_height,
     column_area,
     mass_transfer_coefficient,
-    initial_loading=0.20,
-    number_of_segments=DEFAULT_SEGMENTS
+    specific_interfacial,
+    initial_loading,
+    number_of_segments=DEFAULT_SEGMENTS,
+    solvent_density_kg_m3=DEFAULT_SOLVENT_DENSITY,  
+    co2_balance_tolerance=DEFAULT_CO2_BALANCE_TOLERANCE,  
 ):
 
-    #mathemical checks to ensure that the input values are within reasonable ranges
     if not 0 < co2_inlet_fraction < 1:
-        raise ValueError(
-            "CO2 inlet fraction must be between 0 and 1."
-        )
+        raise ValueError("CO2 inlet fraction must be between 0 and 1.")
 
     if gas_flow <= 0:
-        raise ValueError(
-            "Gas flow must be positive."
-        )
+        raise ValueError("Gas flow must be positive.")
 
     if solvent_flow <= 0:
-        raise ValueError(
-            "Solvent flow must be positive."
-        )
+        raise ValueError("Solvent flow must be positive.")
 
     if not 0 < mea_mass_fraction < 1:
-        raise ValueError(
-            "MEA mass fraction must be between 0 and 1."
-        )
+        raise ValueError("MEA mass fraction must be between 0 and 1.")
 
-    if temperature_K <= 273.15:
-        raise ValueError(
-            "Temperature must be above 0°C."
-        )
+    if temperature_k <= 273.15:
+        raise ValueError("Temperature must be above 0°C.")
 
     if pressure_Pa <= 0:
-        raise ValueError(
-            "Pressure must be positive."
-        )
+        raise ValueError("Pressure must be positive.")
 
     if column_height <= 0:
-        raise ValueError(
-            "Column height must be positive."
-        )
+        raise ValueError("Column height must be positive.")
 
     if column_area <= 0:
-        raise ValueError(
-            "Column area must be positive."
-        )
+        raise ValueError("Column area must be positive.")
 
     if mass_transfer_coefficient <= 0:
-        raise ValueError(
-            "Mass-transfer coefficient must be positive."
-        )
+        raise ValueError("Mass-transfer coefficient must be positive.")
+
+    if specific_interfacial <= 0:
+        raise ValueError("Specific interfacial area must be positive.")
 
     if initial_loading < 0:
-        raise ValueError(
-            "Initial CO2 loading cannot be negative."
-        )
+        raise ValueError("Initial CO2 loading cannot be negative.")
 
     if number_of_segments <= 0:
-        raise ValueError(
-            "Number of segments must be positive."
-        )
+        raise ValueError("Number of segments must be positive.")
 
-    #height per segment and volume of each segment in the absorber column
+    if solvent_density_kg_m3 <= 0:
+        raise ValueError("Solvent density must be positive.")
+
+    if co2_balance_tolerance <= 0:
+        raise ValueError("CO2 balance tolerance must be positive.")
+
     dz = column_height / number_of_segments
     segment_volume = column_area * dz
+    total_interfacial = specific_interfacial * segment_volume
 
-    #variable declarations
-    gas_total_flow = gas_flow
-    solvent_total_flow = solvent_flow
+    mea_moles_per_kg = mea_moles(mea_mass_fraction)
+    water_mass_fraction_value = water_mass_fraction(mea_mass_fraction)
+    mea_molar_flow = solvent_flow * mea_moles_per_kg
+    solvent_volumetric_flow = solvent_flow / solvent_density_kg_m3
+    mea_concentration = mea_molar_flow / max(solvent_volumetric_flow, 1e-12)
 
-    gas_co2_fraction = co2_inlet_fraction
-    loading = initial_loading
+    inlet_co2_flow = co2_inlet_fraction * gas_flow
+    inert_gas_flow = gas_flow - inlet_co2_flow
 
-    total_co2_absorbed = 0.0
+    def evaluate_column(bottom_loading):
 
-    profile = []
+        current_gas_co2 = inlet_co2_flow
+        current_liquid_loading = bottom_loading
+        total_absorbed = 0.0
 
-    # Calculate how many moles of MEA are present
-    # in each kg of the MEA/water solution
-    mea_moles_per_kg = (
-        mea_moles_per_kg_solution(
-            mea_mass_fraction
-        )
-    )
-    # Calculate how much of the solution's mass is water.
-    water_mass_fraction_value = (
-        water_mass_fraction(
-            mea_mass_fraction
-        )
-    )
-    # represents how much MEA/water solution is entering the absorber.
-    solvent_mass_flow = solvent_total_flow
+        profile = []
+        for segment in range(number_of_segments):
 
-    # Calculate the molar flow of MEA entering the absorber.
-    mea_molar_flow = (
-        solvent_mass_flow
-        * mea_moles_per_kg
-    )
+            total_gas = inert_gas_flow + current_gas_co2
+            gas_co2_fraction = current_gas_co2 / max(total_gas, 1e-12)
+            Pp_co2 = co2_partial_pressure(gas_co2_fraction, pressure_Pa)
 
-    for segment in range(number_of_segments):
-
-        # Calculate the CO2 partial pressure in the gas at this point in the absorber.
-
-        co2_partial_pressure_value = (
-            co2_partial_pressure(
-                gas_co2_fraction,
-                pressure_Pa
+            eq_loading_val = eq_loading(
+                temperature_k,
+                pressure_Pa,
+                Pp_co2,
+                mea_mass_fraction,
+                current_liquid_loading,
             )
-        )
 
-         # Calculate the CO2 loading that the solvent
-        # would have at equilibrium under the current
-        # temperature, pressure, etc
-        equilibrium_loading = (
-            equilibrium_state(
-                temperature_K=temperature_K,
-                pressure_Pa=pressure_Pa,
-                co2_partial_pressure=
-                    co2_partial_pressure_value,
-                mea_mass_fraction=
-                    mea_mass_fraction,
-                loading=loading
+            loading_driving_force = max(
+                eq_loading_val - current_liquid_loading, 0.0
             )
-        )
 
-        # Calculate the difference between the
-        # equilibrium loading and the current loading.
-        loading_driving_force = max(
-            equilibrium_loading - loading,
-            0.0
-        )
-
-        # Estimate the current amount of CO2 in
-        # the liquid phase within this segment.
-        liquid_co2_concentration = (
-            loading
-            * mea_molar_flow
-            / segment_volume
-        )
-
-        # Calculate the CO2 concentration the liquid
-        # would have if it reached its equilibrium
-        # loading.
-        equilibrium_co2_concentration = (
-            equilibrium_loading
-            * mea_molar_flow
-            / segment_volume
-        )
-
-        # Calculate how quickly CO2 transfers from
-        # the gas phase into the liquid phase.
-        transfer_rate = (
-            gas_liquid_transfer(
-                gas_co2_fraction=
-                    gas_co2_fraction,
-
-                pressure_Pa=
-                    pressure_Pa,
-
-                liquid_co2_concentration=
-                    liquid_co2_concentration,
-
-                equilibrium_co2_concentration=
-                    equilibrium_co2_concentration,
-
-                mass_transfer_coefficient=
-                    mass_transfer_coefficient,
-
-                interfacial_area=
-                    segment_volume
+            transfer_capacity = gas_liq_transfer(
+                loading_driving_force,
+                mea_concentration,
+                mass_transfer_coefficient,
+                total_interfacial,
             )
-        )
 
-        # Calculate how much MEA is still available
-        # to react with incoming CO2.
-        available_mea = max(
-            1.0 - loading,
-            0.0
-        )
+            co2_concentration = current_liquid_loading * mea_concentration
+            
+            available_mea_fraction = max(1.0 - 2.0 * current_liquid_loading,0.0)
+            available_mea_concentration = available_mea_fraction * mea_concentration
 
-        # Calculate the chemical reaction rate between
-        # dissolved CO2 and available MEA.
-        reaction = (
-            reaction_rate(
-                co2_concentration=
-                    max(
-                        liquid_co2_concentration,
-                        0.0
-                    ),
+            reaction = reaction_rate(temperature_k,max(co2_concentration, 0.0),
+                    max(available_mea_concentration,0.0))
 
-                mea_concentration=
-                    available_mea
-                    * mea_molar_flow
-                    / segment_volume,
+            reaction_capacity = reaction * segment_volume
+            max_loading_capacity = loading_driving_force * mea_molar_flow
 
-                temperature_K=
-                    temperature_K
-            )
-        )
+            co2_removed = min(transfer_capacity,reaction_capacity,
+                current_gas_co2,max_loading_capacity)
+            co2_removed = max(co2_removed,0.0)
 
-        # Convert the mass-transfer rate into the
-        # maximum amount of CO2 that can be transferred
-        # within this segment.
-        transfer_capacity = (
-            transfer_rate
-            * segment_volume
-        )
+            profile.append({
+                "segment":segment + 1,
+                "height_m":(segment + 1) * dz,
+                "gas_CO2_fraction":gas_co2_fraction,
+                "co2_partial_pressure":Pp_co2,
+                "equilibrium_loading":eq_loading_val,
+                "loading":current_liquid_loading,
+                "loading_driving_force":loading_driving_force,
+                "co2_removed_mol_s":co2_removed,
+                "transfer_capacity":transfer_capacity,
+                "reaction_capacity":reaction_capacity,
+                "reaction_rate":reaction})
 
-        # Convert the reaction rate into the maximum
-        # amount of CO2 that can react within this
-        # segment.
-        reaction_capacity = (
-            reaction
-            * segment_volume
-        )
+            current_gas_co2 -= co2_removed
+            current_gas_co2 = max(current_gas_co2,0.0)
 
-        # Calculate how much CO2 is entering this
-        # segment with the gas.
-        inlet_co2_flow = (
-            gas_co2_fraction
-            * gas_total_flow
-        )
+            loading_change = co2_removed / max(mea_molar_flow, 1e-12)
+            current_liquid_loading -= loading_change
+            current_liquid_loading = max(current_liquid_loading,0.0)
+            total_absorbed += co2_removed
 
-         # Make sure the amount of available CO2 isnt negative
-        maximum_available_co2 = (
-            max(
-                inlet_co2_flow,
-                0.0
-            )
-        )
+        error = current_liquid_loading - initial_loading
 
-        # Determine the effective amount of CO2
-        # that can actually be removed.
-        effective_reaction_capacity = min(
-            transfer_capacity,
-            reaction_capacity
-        )
+        return (error,profile,current_gas_co2,total_absorbed)
 
+    low_guess = initial_loading
+    high_guess = 0.50
 
-        co2_removed = min(
-            effective_reaction_capacity,
-            maximum_available_co2
-        )
+    for _ in range(50):
 
-        co2_removed = max(
-            co2_removed,
-            0.0
-        )
+        mid_guess = (low_guess + high_guess) / 2.0
+        error, _, _, _ = (evaluate_column(mid_guess))
 
-        # Calculate how much CO2 remains in the gas
-        # after passing through this segment.
-        outlet_co2_flow = (
-            inlet_co2_flow
-            - co2_removed
-        )
+        if abs(error) < 1e-5:
+            break
+        if error > 0:
+            # Calculated top loading is too high.
+            high_guess = mid_guess
+        else:
+            # Calculated top loading is too low.
+            low_guess = mid_guess
 
-        # Prevent the outlet CO2 flow from becoming
-        # negative due to numerical calculations.
-        outlet_co2_flow = max(
-            outlet_co2_flow,
-            0.0
-        )
+    (final_error,final_profile,
+    final_gas_co2,total_co2_absorbed) = evaluate_column(mid_guess)
 
-        # Calculate the new CO2 fraction in the gas
-        # after this segment.
-        gas_co2_fraction = (
-            outlet_co2_flow
-            / gas_total_flow
-        )
-
-        # Calculate how much the solvent's CO2 loading
-        # increases because of the CO2 absorbed
-        loading_change = (
-            co2_removed
-            / mea_molar_flow
-        )
-
-        # Add the newly absorbed CO2 to the solvent's
-        loading += loading_change
-
-        loading = max(
-            loading,
-            0.0
-        )
-
-        # Add the CO2 absorbed in this segment to
-        # the total CO2 absorbed by the entire absorber.
-        total_co2_absorbed += co2_removed
-
-        # Save the results from this segment.
-        profile.append(
-            {
-                "segment": segment + 1,
-                "height_m": (segment + 1) * dz,
-                "gas_CO2_fraction": gas_co2_fraction,
-                "CO2_partial_pressure_Pa":
-                    co2_partial_pressure_value,
-                "equilibrium_loading":
-                    equilibrium_loading,
-                "loading":
-                    loading,
-                "loading_driving_force":
-                    loading_driving_force,
-                "CO2_removed_mol_s":
-                    co2_removed,
-                "reaction_rate":
-                    reaction
-            }
-        )
-
-    inlet_co2_flow = (
-        co2_inlet_fraction
-        * gas_total_flow
-    )
+    loading_based_co2_absorbed = (mea_molar_flow *
+    max(mid_guess - initial_loading,0.0))
+    
+    co2_balance_error = (
+        abs(total_co2_absorbed - loading_based_co2_absorbed)
+        / max(total_co2_absorbed,1e-12))
 
     if inlet_co2_flow > 0:
-
         capture_percentage = (
-            total_co2_absorbed
-            / inlet_co2_flow
-        ) * 100.0
-
+            total_co2_absorbed / inlet_co2_flow * 100.0)
     else:
-
         capture_percentage = 0.0
-
+    
+    final_total_gas = inert_gas_flow + final_gas_co2
+    outlet_co2_fraction = final_gas_co2 / max(final_total_gas, 1e-12)
+    
     return {
-        "capture_percentage":
-            capture_percentage,
-
-        "outlet_co2_fraction":
-            gas_co2_fraction,
-
-        "co2_absorbed_mol_s":
-            total_co2_absorbed,
-
-        "rich_loading":
-            loading,
-
-        "profile":
-            profile
-    }
+        "capture_percentage":capture_percentage,
+        "outlet_co2_fraction":outlet_co2_fraction,
+        "co2_absorbed_mol_s":total_co2_absorbed,
+        "loading_based_co2_absorbed_mol_s":loading_based_co2_absorbed,
+        "co2_balance_error":co2_balance_error,
+        "co2_balance_error_percentage":co2_balance_error * 100.0,
+        "absorber_balance_passed":co2_balance_error <= co2_balance_tolerance,
+        "rich_loading":mid_guess,
+        "mea_molar_flow":mea_molar_flow,
+        "water_mass_fraction":water_mass_fraction_value,
+        "profile":final_profile}
 
 if __name__ == "__main__":
 
-    print("          CO2 ABSORBER TEST")
+    co2_inlet_fraction = float(
+        input("Enter the CO2 inlet fraction (between 0 and 1): ")
+    )
+    if not (0 < co2_inlet_fraction < 1):
+        raise ValueError("CO2 inlet fraction must be strictly between 0 and 1.")
 
+    gas_flow = float(input("Enter the gas flow (mol/s, positive): "))
+    if gas_flow <= 0:
+        raise ValueError("Gas flow must be positive.")
+
+    solvent_flow = float(input("Enter the solvent flow (mol/s, positive): "))
+    if solvent_flow <= 0:
+        raise ValueError("Solvent flow must be positive.")
+
+    mea_mass_fraction = float(
+    input("Enter the MEA mass fraction (between 0 and 1): ")
+)
+    if not (0 < mea_mass_fraction < 1):
+        raise ValueError("MEA mass fraction must be strictly between 0 and 1.")
+
+    temperature_k = float(input("Enter the temperature (K, above 273.15): "))
+    if temperature_k <= 273.15:
+        raise ValueError("Temperature must be above 273.15 K.")
+
+    pressure_Pa = float(input("Enter the pressure (Pa, positive): "))
+    if pressure_Pa <= 0:
+        raise ValueError("Pressure must be positive.")
+
+    column_height = float(input("Enter the column height (m, positive): "))
+    if column_height <= 0:
+        raise ValueError("Column height must be positive.")
+
+    column_area = float(input("Enter the column area (m², positive): "))
+    if column_area <= 0:
+        raise ValueError("Column area must be positive.")
+
+    mass_transfer_coefficient = float(
+    input("Enter the mass-transfer coefficient (m/s, positive): ")
+)
+    if mass_transfer_coefficient <= 0:
+        raise ValueError("Mass-transfer coefficient must be positive.")
+
+    specific_interfacial = float(
+    input("Enter the specific interfacial area (m²/m³, positive): ")
+)
+    if specific_interfacial <= 0:
+        raise ValueError("Specific interfacial area must be positive.")
+
+    initial_loading = float(
+    input("Enter the initial CO2 loading (mol CO2/mol MEA, positive): ")
+)
+    if initial_loading < 0:
+        raise ValueError("Initial CO2 loading cannot be negative.")
 
     results = simulate_absorber(
-
-        co2_inlet_fraction=0.12,
-
-        gas_flow=100.0,
-
-        solvent_flow=120.0,
-
-        mea_mass_fraction=0.30,
-
-        temperature_K=313.15,
-
-        pressure_Pa=101325,
-
-        column_height=20.0,
-
-        column_area=10.0,
-
-        mass_transfer_coefficient=0.01,
-
-        initial_loading=0.20,
-
-        number_of_segments=50
+        co2_inlet_fraction,
+        gas_flow,
+        solvent_flow,
+        mea_mass_fraction,
+        temperature_k,
+        pressure_Pa,
+        column_height,
+        column_area,
+        mass_transfer_coefficient,
+        specific_interfacial,
+        initial_loading,
+        DEFAULT_SEGMENTS,
+        DEFAULT_SOLVENT_DENSITY,
+        DEFAULT_CO2_BALANCE_TOLERANCE
     )
 
-
-    print(
-        f"\nCO2 capture: "
-        f"{results['capture_percentage']:.2f}%"
-    )
-
-
-    print(
-        f"Outlet CO2: "
-        f"{results['outlet_co2_fraction'] * 100:.2f}%"
-    )
-
-
-    print(
-        f"CO2 absorbed: "
-        f"{results['co2_absorbed_mol_s']:.4f} mol/s"
-    )
-
-
-    print(
-        f"Rich loading: "
-        f"{results['rich_loading']:.4f} mol CO2/mol MEA"
-    )
-
-
-    print("\nFirst 5 absorber segments:")
-
-    for row in results["profile"][:5]:
-
-        print(row)
-
-
-    print("\n======================================")
+    print(f"\nCO2 capture: {results['capture_percentage']:.2f}%")
+    print(f"Outlet CO2: {results['outlet_co2_fraction'] * 100:.2f}%")
+    print(f"CO2 absorbed: {results['co2_absorbed_mol_s']:.4f} mol/s")
+    print(f"Rich loading: {results['rich_loading']:.4f} mol CO2/mol MEA")
