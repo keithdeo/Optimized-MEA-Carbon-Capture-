@@ -11,7 +11,6 @@ DEFAULT_CO2_BALANCE_TOLERANCE = 0.05
 
 def gas_liq_transfer(loading_driving_force, mea_conc, mass_coeff, interfacial):
 
-    # FIXED: Moved validation checks above early exit check
     if mea_conc <= 0:
         raise ValueError("MEA concentration must be positive.")
 
@@ -40,16 +39,16 @@ def simulate_absorber(
     gas_flow,
     solvent_flow,
     mea_mass_fraction,
-    temperature_K,
+    temperature_k,
     pressure_Pa,
     column_height,
     column_area,
     mass_transfer_coefficient,
     specific_interfacial,
     initial_loading,
-    number_of_segments=DEFAULT_SEGMENTS,  # FIXED: Assigned default constant
-    solvent_density_kg_m3=DEFAULT_SOLVENT_DENSITY,  # FIXED: Assigned default constant
-    co2_balance_tolerance=DEFAULT_CO2_BALANCE_TOLERANCE,  # FIXED: Assigned default constant
+    number_of_segments=DEFAULT_SEGMENTS,
+    solvent_density_kg_m3=DEFAULT_SOLVENT_DENSITY,  
+    co2_balance_tolerance=DEFAULT_CO2_BALANCE_TOLERANCE,  
 ):
 
     if not 0 < co2_inlet_fraction < 1:
@@ -64,7 +63,7 @@ def simulate_absorber(
     if not 0 < mea_mass_fraction < 1:
         raise ValueError("MEA mass fraction must be between 0 and 1.")
 
-    if temperature_K <= 273.15:
+    if temperature_k <= 273.15:
         raise ValueError("Temperature must be above 0°C.")
 
     if pressure_Pa <= 0:
@@ -121,7 +120,7 @@ def simulate_absorber(
             Pp_co2 = co2_partial_pressure(gas_co2_fraction, pressure_Pa)
 
             eq_loading_val = eq_loading(
-                temperature_K,
+                temperature_k,
                 pressure_Pa,
                 Pp_co2,
                 mea_mass_fraction,
@@ -139,296 +138,91 @@ def simulate_absorber(
                 total_interfacial,
             )
 
-            # -------------------------------------------------
-            # Reaction kinetics
-            # -------------------------------------------------
+            co2_concentration = current_liquid_loading * mea_concentration
+            
+            available_mea_fraction = max(1.0 - 2.0 * current_liquid_loading,0.0)
+            available_mea_concentration = available_mea_fraction * mea_concentration
 
-            co2_concentration = (
-                current_liquid_loading
-                * mea_concentration
-            )
+            reaction = reaction_rate(temperature_k,max(co2_concentration, 0.0),
+                    max(available_mea_concentration,0.0))
 
-            available_mea_fraction = max(
-                1.0 - 2.0 * current_liquid_loading,
-                0.0
-            )
+            reaction_capacity = reaction * segment_volume
+            max_loading_capacity = loading_driving_force * mea_molar_flow
 
-            available_mea_concentration = (
-                available_mea_fraction
-                * mea_concentration
-            )
-
-            reaction = reaction_rate(
-                co2_concentration=
-                    max(co2_concentration, 0.0),
-                mea_concentration=
-                    max(
-                        available_mea_concentration,
-                        0.0
-                    ),
-                temperature_K=temperature_K
-            )
-
-            # Reaction capacity in mol/s
-            reaction_capacity = (
-                reaction * segment_volume
-            )
-
-            # -------------------------------------------------
-            # Physical limits
-            # -------------------------------------------------
-
-            # Maximum CO2 that can be transferred before
-            # reaching equilibrium in this segment.
-            max_loading_capacity = (
-                loading_driving_force
-                * mea_molar_flow
-            )
-
-            # CO2 transfer is limited by:
-            #
-            # 1. Mass-transfer capacity
-            # 2. Reaction capacity
-            # 3. CO2 available in gas
-            # 4. Available liquid loading capacity
-            #
-            co2_removed = min(
-                transfer_capacity,
-                reaction_capacity,
-                current_gas_co2,
-                max_loading_capacity
-            )
-
-            co2_removed = max(
-                co2_removed,
-                0.0
-            )
-
-            # -------------------------------------------------
-            # Store segment information
-            # -------------------------------------------------
+            co2_removed = min(transfer_capacity,reaction_capacity,
+                current_gas_co2,max_loading_capacity)
+            co2_removed = max(co2_removed,0.0)
 
             profile.append({
-                "segment": segment + 1,
-
-                "height_m":
-                    (segment + 1) * dz,
-
-                "gas_CO2_fraction":
-                    gas_co2_fraction,
-
-                "CO2_partial_pressure_Pa":
-                    co2_partial_pressure_value,
-
-                "equilibrium_loading":
-                    equilibrium_loading_value,
-
-                "loading":
-                    current_liquid_loading,
-
-                "loading_driving_force":
-                    loading_driving_force,
-
-                "CO2_removed_mol_s":
-                    co2_removed,
-
-                "transfer_capacity":
-                    transfer_capacity,
-
-                "reaction_capacity":
-                    reaction_capacity,
-
-                "reaction_rate":
-                    reaction
-            })
-
-            # -------------------------------------------------
-            # Update gas stream
-            # -------------------------------------------------
+                "segment":segment + 1,
+                "height_m":(segment + 1) * dz,
+                "gas_CO2_fraction":gas_co2_fraction,
+                "co2_partial_pressure":Pp_co2,
+                "equilibrium_loading":eq_loading_val,
+                "loading":current_liquid_loading,
+                "loading_driving_force":loading_driving_force,
+                "co2_removed_mol_s":co2_removed,
+                "transfer_capacity":transfer_capacity,
+                "reaction_capacity":reaction_capacity,
+                "reaction_rate":reaction})
 
             current_gas_co2 -= co2_removed
+            current_gas_co2 = max(current_gas_co2,0.0)
 
-            current_gas_co2 = max(
-                current_gas_co2,
-                0.0
-            )
-
-            # -------------------------------------------------
-            # Update liquid loading
-            # -------------------------------------------------
-
-            loading_change = (
-                co2_removed
-                / max(mea_molar_flow, 1e-12)
-            )
-
-            current_liquid_loading -= (
-                loading_change
-            )
-
-            current_liquid_loading = max(
-                current_liquid_loading,
-                0.0
-            )
-
+            loading_change = co2_removed / max(mea_molar_flow, 1e-12)
+            current_liquid_loading -= loading_change
+            current_liquid_loading = max(current_liquid_loading,0.0)
             total_absorbed += co2_removed
 
-        # -----------------------------------------------------
-        # Shooting-method boundary error
-        # -----------------------------------------------------
+        error = current_liquid_loading - initial_loading
 
-        error = (
-            current_liquid_loading
-            - initial_loading
-        )
-
-        return (
-            error,
-            profile,
-            current_gas_co2,
-            total_absorbed
-        )
-
-    # ---------------------------------------------------------
-    # 6. Bisection search for rich loading
-    # ---------------------------------------------------------
+        return (error,profile,current_gas_co2,total_absorbed)
 
     low_guess = initial_loading
-
     high_guess = 0.50
-
-    mid_guess = low_guess
 
     for _ in range(50):
 
-        mid_guess = (
-            low_guess + high_guess
-        ) / 2.0
-
-        error, _, _, _ = (
-            evaluate_column_profile(
-                mid_guess
-            )
-        )
+        mid_guess = (low_guess + high_guess) / 2.0
+        error, _, _, _ = (evaluate_column(mid_guess))
 
         if abs(error) < 1e-5:
             break
-
         if error > 0:
-
             # Calculated top loading is too high.
-            # Reduce bottom/rich loading.
             high_guess = mid_guess
-
         else:
-
             # Calculated top loading is too low.
-            # Increase bottom/rich loading.
             low_guess = mid_guess
 
-    # ---------------------------------------------------------
-    # 7. Final absorber calculation
-    # ---------------------------------------------------------
+    (final_error,final_profile,
+    final_gas_co2,total_co2_absorbed) = evaluate_column(mid_guess)
 
-    (
-        final_error,
-        final_profile,
-        final_gas_co2,
-        total_co2_absorbed
-    ) = evaluate_column_profile(
-        mid_guess
-    )
-
-    # ---------------------------------------------------------
-    # 8. Independent CO2 calculation from solvent loading
-    #
-    # At steady state:
-    #
-    # CO2 absorbed =
-    # MEA flow × (rich loading - lean loading)
-    # ---------------------------------------------------------
-
-    loading_based_co2_absorbed = (
-        mea_molar_flow
-        * max(
-            mid_guess - initial_loading,
-            0.0
-        )
-    )
-
-    # ---------------------------------------------------------
-    # 9. CO2 balance check
-    # ---------------------------------------------------------
-
+    loading_based_co2_absorbed = (mea_molar_flow *
+    max(mid_guess - initial_loading,0.0))
+    
     co2_balance_error = (
-        abs(
-            total_co2_absorbed
-            - loading_based_co2_absorbed
-        )
-        / max(
-            total_co2_absorbed,
-            1e-12
-        )
-    )
+        abs(total_co2_absorbed - loading_based_co2_absorbed)
+        / max(total_co2_absorbed,1e-12))
 
-    # ---------------------------------------------------------
-    # 10. Final overall gas-side metrics
-    # ---------------------------------------------------------
-
-    capture_percentage = (
-        total_co2_absorbed
-        / inlet_co2_flow
-        * 100.0
-        if inlet_co2_flow > 0
-        else 0.0
-    )
-
-    final_total_gas = (
-        inert_gas_flow
-        + final_gas_co2
-    )
-
-    outlet_co2_fraction = (
-        final_gas_co2
-        / max(final_total_gas, 1e-12)
-    )
-
-    # ---------------------------------------------------------
-    # 11. Return results
-    # ---------------------------------------------------------
-
+    if inlet_co2_flow > 0:
+        capture_percentage = (
+            total_co2_absorbed / inlet_co2_flow * 100.0)
+    else:
+        capture_percentage = 0.0
+    
+    final_total_gas = inert_gas_flow + final_gas_co2
+    outlet_co2_fraction = final_gas_co2 / max(final_total_gas, 1e-12)
+    
     return {
-        "capture_percentage":
-            capture_percentage,
-
-        "outlet_co2_fraction":
-            outlet_co2_fraction,
-
-        "co2_absorbed_mol_s":
-            total_co2_absorbed,
-
-        "loading_based_co2_absorbed_mol_s":
-            loading_based_co2_absorbed,
-
-        "co2_balance_error":
-            co2_balance_error,
-
-        "co2_balance_error_percentage":
-            co2_balance_error * 100.0,
-
-        "absorber_balance_passed":
-            co2_balance_error
-            <= co2_balance_tolerance,
-
-        "rich_loading":
-            mid_guess,
-
-        "MEA_molar_flow":
-            mea_molar_flow,
-
-        "water_mass_fraction":
-            water_mass_fraction_value,
-
-        "profile":
-            final_profile
-    }
+        "capture_percentage":capture_percentage,
+        "outlet_co2_fraction":outlet_co2_fraction,
+        "co2_absorbed_mol_s":total_co2_absorbed,
+        "loading_based_co2_absorbed_mol_s":loading_based_co2_absorbed,
+        "co2_balance_error":co2_balance_error,
+        "co2_balance_error_percentage":co2_balance_error * 100.0,
+        "absorber_balance_passed":co2_balance_error <= co2_balance_tolerance,
+        "rich_loading":mid_guess,
+        "mea_molar_flow":mea_molar_flow,
+        "water_mass_fraction":water_mass_fraction_value,
+        "profile":final_profile}
