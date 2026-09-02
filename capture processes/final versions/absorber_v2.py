@@ -10,7 +10,7 @@ from properties import (
     co2_diffusivity
 )
 
-DEFAULT_SEGMENTS = 100  # Increased for better mathematical resolution
+DEFAULT_SEGMENTS = 100 
 DEFAULT_SOLVENT_DENSITY = 1050.0
 DEFAULT_CO2_BALANCE_TOLERANCE = 0.05
 
@@ -111,17 +111,10 @@ def simulate_absorber(
             )
             
             effective_transfer_rate = mass_transfer_coefficient * E * total_interfacial * free_co2_concentration 
-            
-            # --- STIFF ODE FIX APPLIED HERE ---
-            # By capping the transfer to 25% of the available gap per segment, 
-            # we force the solver to take smooth steps toward equilibrium instead of violently crashing.
             max_loading_capacity = (loading_driving_force * mea_molar_flow) * 0.25
             max_gas_capacity = current_gas_co2 * 0.25
-            
             co2_removed = min(effective_transfer_rate, max_gas_capacity, max_loading_capacity)
             co2_removed = max(co2_removed, 0.0)
-            # ----------------------------------
-
             profile.append({
                 "segment": segment + 1,
                 "height_m": (segment + 1) * dz,
